@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Explore Wakulla County</title>
+<!--
+  ============================================================
+  EXPLORE WAKULLA - 3D visitor map (MapLibre GL JS)
+  ============================================================
+  HOW TO EDIT (most of the time you only touch ArcGIS Online):
+
+  1. Places and wildlife come live from ArcGIS Online feature layers.
+     Add, move, or edit a point in AGOL and the site updates on refresh.
+     Fields the map reads (case doesn't matter, blanks are skipped):
+       Places:   Name (or Park), typ, Info, Address, PhotoURL (optional)
+       Wildlife: Name, Species, Info, PhotoURL, PhotoCredit (optional)
+
+  2. Everything else lives in the CONFIG block below:
+     layer URLs, category colors/icons, fly-over tours, start view.
+
+  3. The layers must be shared publicly in AGOL.
+  ============================================================
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Young+Serif&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"></script>
+<style>
+  :root {
+    --cypress: #193F23;     /* county brand green (from the AGOL app theme) */
+    --spring: #1A9DAA;      /* spring-water teal */
+    --sawgrass: #C99A2E;    /* salt-marsh gold, used for wildlife */
+    --shell: #F4F6F1;       /* panel background */
+    --ink: #17231B;
+    --muted: #5B6B60;
+    --line: #D9DFD6;
+    --serif: "Young Serif", Georgia, "Times New Roman", serif;
+    --sans: "Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --stem: 40px;
+    --pin: 1;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--sans); color: var(--ink); background: #DCE6E0; }
+  #map { position: absolute; inset: 0; }
+
+  /* ---------- Side panel ---------- */
+  .panel {
+    position: absolute; z-index: 5;
+    top: calc(16px + env(safe-area-inset-top, 0px)); left: 16px; bottom: 16px;
+    width: 360px; display: flex; flex-direction: column;
+    background: var(--shell); border: 1px solid var(--line); border-radius: 20px;
+    box-shadow: 0 12px 40px rgba(25, 63, 35, .18);
+    overflow: hidden;
+  }
+  .panel-head { padding: 22px 22px 14px; border-bottom: 1px solid var(--line); }
+  .panel-head h1 {
+    font-family: var(--serif); font-weight: 400; color: var(--cypress);
+    font-size: 32px; line-height: 1.05; margin: 0 0 6px; letter-spacing: -.01em;
+  }
+  .panel-head p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.45; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+  .chip {
+    font: 500 13px/1 var(--sans); color: var(--ink);
+    border: 1px solid var(--line); background: #fff; border-radius: 999px;
+    padding: 7px 11px 7px 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .chip i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); display: block; }
+  .chip[aria-pressed="false"] { opacity: .45; background: transparent; }
+  .chip[aria-pressed="false"] i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+
+  .scroll { overflow-y: auto; flex: 1; min-height: 0; }
+  .browse { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .detail { min-height: 0; }
+  .section { padding: 16px 22px 6px; }
+  .section h2 { font: 600 14px/1.3 var(--sans); color: var(--muted); margin: 0 0 10px; }
+
+  .tours { display: grid; gap: 8px; }
+  .tour {
+    text-align: left; border: 0; cursor: pointer; border-radius: 12px;
+    background: var(--cypress); color: #fff; padding: 11px 14px;
+    font: 600 15px/1.2 var(--sans); display: flex; justify-content: space-between; align-items: center;
+  }
+  .tour span { font-weight: 400; font-size: 13px; opacity: .8; }
+  .tour:hover { background: #22552F; }
+
+  .list { list-style: none; margin: 0; padding: 0 12px 16px; }
+  .row {
+    width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+    background: none; border: 0; border-radius: 12px; padding: 8px 10px; cursor: pointer; color: inherit;
+    font: inherit;
+  }
+  .row:hover { background: #E8EDE5; }
+  .row .thumb {
+    width: 38px; height: 38px; border-radius: 50%; flex: none; background: #fff center/70% no-repeat;
+    box-shadow: 0 0 0 2px var(--c);
+  }
+  .row .thumb.photo { background-size: cover; }
+  .row b { display: block; font-weight: 600; font-size: 15px; }
+  .row small { color: var(--muted); font-size: 13px; }
+  .status { padding: 12px 22px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .status.error { color: #8A2B1E; }
+
+  /* ---------- Detail card ---------- */
+  .detail { display: none; }
+  .panel.showing-detail .browse { display: none; }
+  .panel.showing-detail .detail { display: block; }
+  .back {
+    border: 0; background: none; color: var(--cypress); cursor: pointer;
+    font: 600 14px var(--sans); padding: 16px 22px 6px;
+  }
+  .detail-hero { margin: 8px 22px 0; border-radius: 16px; overflow: hidden; aspect-ratio: 16/10; background: #E1E8DD center/cover; }
+  .detail-hero.icon { background-size: 35%; background-repeat: no-repeat; background-color: #fff; border: 1px solid var(--line); }
+  .detail-body { padding: 16px 22px 24px; }
+  .detail-body .cat { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .detail-body .cat i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+  .detail-body h3 { font-family: var(--serif); font-weight: 400; font-size: 27px; line-height: 1.15; margin: 6px 0 10px; color: var(--cypress); }
+  .detail-body p { font-size: 15px; line-height: 1.55; margin: 0 0 12px; max-width: 62ch; }
+  .detail-body .addr { color: var(--muted); font-size: 14px; }
+  .credit { color: var(--muted); font-size: 12px; }
+  .directions {
+    display: inline-block; margin-top: 6px; background: var(--spring); color: #fff; text-decoration: none;
+    padding: 11px 16px; border-radius: 12px; font-weight: 600; font-size: 15px;
+  }
+
+  button:focus-visible, a:focus-visible { outline: 3px solid var(--sawgrass); outline-offset: 2px; }
+
+  /* ---------- Billboard pins ---------- */
+  .pin {
+    background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit;
+    cursor: pointer; display: flex; flex-direction: column; align-items: center;
+    transform-origin: bottom center;
+  }
+  .pin-head {
+    width: calc(46px * var(--pin)); height: calc(46px * var(--pin)); border-radius: 50%;
+    background: #fff center/68% no-repeat; border: 3px solid var(--c);
+    box-shadow: 0 6px 14px rgba(0,0,0,.28);
+    transition: transform .15s ease;
+  }
+  .pin.wild .pin-head { width: calc(58px * var(--pin)); height: calc(58px * var(--pin)); background-size: cover; border-width: 3px; }
+  .pin-stem { width: 2px; height: var(--stem); background: linear-gradient(var(--c), rgba(255,255,255,.9)); }
+  .pin-foot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px rgba(255,255,255,.7); }
+  .pin-label {
+    position: absolute; bottom: calc(var(--stem) + 8px + 50px * var(--pin)); left: 50%; transform: translateX(-50%);
+    white-space: nowrap; font: 600 12px/1 var(--sans); color: var(--ink);
+    background: rgba(255,255,255,.92); border-radius: 999px; padding: 5px 9px; display: none;
+    pointer-events: none;
+  }
+  .pin.wild .pin-label { bottom: calc(var(--stem) + 8px + 62px * var(--pin)); }
+  .show-labels .pin-label, .pin:hover .pin-label, .pin:focus-visible .pin-label, .pin.active .pin-label { display: block; }
+  .pin:hover .pin-head, .pin.active .pin-head { transform: scale(1.12); }
+  .pin.active { z-index: 3; }
+  .pin:focus-visible .pin-head { outline: 3px solid var(--sawgrass); outline-offset: 2px; }
+  .pin[hidden] { display: none; }
+
+  .maplibregl-ctrl-group { border-radius: 12px !important; }
+
+  /* ---------- Mobile: bottom sheet ---------- */
+  @media (max-width: 720px) {
+    .panel {
+      top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 46vh;
+      border-radius: 20px 20px 0 0; border-bottom: 0;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .panel-head { padding: 16px 18px 12px; }
+    .panel-head h1 { font-size: 26px; }
+    .section { padding: 14px 18px 4px; }
+    .tours { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  }
+  @media (prefers-reduced-motion: reduce) { .pin-head { transition: none; } }
+</style>
+</head>
+<body>
+<div id="map" aria-label="3D map of Wakulla County"></div>
+
+<aside class="panel" id="panel">
+  <div class="browse">
+    <header class="panel-head">
+      <h1 id="title">Explore Wakulla</h1>
+      <p id="subtitle"></p>
+      <div class="chips" id="chips" aria-label="Show or hide categories"></div>
+    </header>
+    <div class="scroll">
+      <section class="section">
+        <h2>Fly over</h2>
+        <div class="tours" id="tours"></div>
+      </section>
+      <section class="section"><h2>Places and wildlife</h2></section>
+      <div class="status" id="status">Loading places…</div>
+      <ul class="list" id="list"></ul>
+    </div>
+  </div>
+  <div class="detail scroll" id="detail" aria-live="polite"></div>
+</aside>
+
+<script>
+/* ============================================================
+   CONFIG - edit this block
+   ============================================================ */
+const CONFIG = {
+  title: "Explore Wakulla",
+  subtitle: "Springs, rivers, and the Gulf coast. Tap a pin to learn more, or take a fly-over.",
+
+  // Where the map opens
+  startView: { center: [-84.32, 30.08], zoom: 10.3, pitch: 58, bearing: -12 },
+
+  // Free basemap, no API key (OpenFreeMap). Swap for another MapLibre style URL any time.
+  basemapStyle: "https://tiles.openfreemap.org/styles/liberty",
+
+  // Wakulla is flat, so exaggerate the terrain to give the coast some shape. 1 = true height.
+  terrain: { enabled: true, exaggeration: 1 },
+
+  // County boundary (your existing AGOL layer)
+  countyOutlineUrl: "https://services9.arcgis.com/vAltLjtfYIJc7pDt/arcgis/rest/services/Tourist_Map_3D_WFL1/FeatureServer/0",
+
+  // Point layers from AGOL. Each needs to be shared publicly.
+  layers: [
+    {
+      kind: "place",
+      url: "https://services9.arcgis.com/vAltLjtfYIJc7pDt/arcgis/rest/services/Tourist_Map_3D_WSL1/FeatureServer/0",
+      fields: { name: ["Name", "Park"], category: ["typ"], info: ["Info"], address: ["Address"], photo: ["PhotoURL"], credit: ["PhotoCredit"] }
+    },
+    {
+      kind: "wildlife",
+      // Paste your Wildlife layer URL here (…/FeatureServer/0). Until then, the demo points below are shown.
+      url: "https://services9.arcgis.com/vAltLjtfYIJc7pDt/arcgis/rest/services/wildlife_layer_template/FeatureServer/0",
+      fields: { name: ["Name"], species: ["Species"], info: ["Info"], photo: ["PhotoURL"], credit: ["PhotoCredit"] },
+      demoData: "DEMO_WILDLIFE"
+    }
+  ],
+
+  // One entry per value in your "typ" field. icon can be a file path ("icons/spring.png") or the built-in icons.
+  categories: {
+    "Spring":         { label: "Springs",         color: "#1A9DAA", icon: "EXISTING:Spring" },
+    "Beach":          { label: "Beaches",         color: "#D98C3F", icon: "EXISTING:Beach" },
+    "Park":           { label: "Parks",           color: "#3E8E4F", icon: "EXISTING:Park" },
+    "Boat Ramp":      { label: "Boat ramps",      color: "#2F6DB5", icon: "EXISTING:Boat Ramp" },
+    "Lighthouse":     { label: "Lighthouse",      color: "#B8412E", icon: "EXISTING:Lighthouse" },
+    "Golf Course":    { label: "Golf",            color: "#6E8B2C", icon: "EXISTING:Golf Course" },
+    "Welcome Center": { label: "Welcome center",  color: "#193F23", icon: "EXISTING:Welcome Center" },
+    "Wildlife":       { label: "Wildlife",        color: "#C99A2E", icon: null }
+  },
+
+  // Fly-over tours. Each stop is a camera position; add or remove stops freely.
+  tours: [
+    { name: "Wakulla Springs and River", note: "3 stops", stops: [
+      { center: [-84.3017, 30.2343], zoom: 14.2, pitch: 65, bearing: -25 },
+      { center: [-84.2620, 30.2132], zoom: 13.6, pitch: 62, bearing: 15 },
+      { center: [-84.2450, 30.1760], zoom: 13.4, pitch: 60, bearing: 40 }
+    ]},
+    { name: "Coastal Attractions", note: "3 stops", stops: [
+      { center: [-84.3414, 29.9747], zoom: 13.6, pitch: 62, bearing: -30 },
+      { center: [-84.2902, 30.0578], zoom: 13.6, pitch: 62, bearing: 20 },
+      { center: [-84.1786, 30.0755], zoom: 14.2, pitch: 66, bearing: 60 }
+    ]},
+    { name: "Wakulla County", note: "overview", stops: [
+      { center: [-84.32, 30.08], zoom: 10.3, pitch: 58, bearing: 0 }
+    ]}
+  ]
+};
+
+// Demo wildlife points, used only until CONFIG.layers[1].url is filled in.
+// Photos are from Wikimedia Commons; swap in county photos when you have them.
+const DEMO_WILDLIFE = [
+  { name: "Manatees at Wakulla Springs", species: "West Indian manatee", lon: -84.2992, lat: 30.2362,
+    info: "Manatees move into the spring run in cooler months, when the steady spring water is warmer than the Gulf. The glass-bottom and river boat tours are the best way to spot them.",
+    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Manatee_with_calf.PD_-_colour_corrected.jpg/330px-Manatee_with_calf.PD_-_colour_corrected.jpg", credit: "Wikimedia Commons" },
+  { name: "Alligators on the Wakulla River", species: "American alligator", lon: -84.2585, lat: 30.2020,
+    info: "Look for alligators sunning on banks and logs along the upper river, especially on warm mornings. Keep your distance and never feed them.",
+    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/0/03/American_Alligator.jpg/330px-American_Alligator.jpg", credit: "Wikimedia Commons" },
+  { name: "Wading birds at St. Marks", species: "Wood stork", lon: -84.1560, lat: 30.0960,
+    info: "The refuge's marshes and impoundments draw wood storks, herons, and egrets. Lighthouse Road has pull-offs made for birding.",
+    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1c/WoodStorkWhole.JPG/330px-WoodStorkWhole.JPG", credit: "Wikimedia Commons" },
+  { name: "Monarch migration", species: "Monarch butterfly", lon: -84.1835, lat: 30.0805,
+    info: "Every October, monarchs stop at the coast near the St. Marks Lighthouse to rest and feed before crossing the Gulf.",
+    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/73/Monarch_Butterfly_Danaus_plexippus_Male_2664px.jpg/330px-Monarch_Butterfly_Danaus_plexippus_Male_2664px.jpg", credit: "Wikimedia Commons" },
+  { name: "Bald eagles", species: "Bald eagle", lon: -84.1250, lat: 30.1250,
+    info: "Bald eagles nest in the tall pines of the St. Marks National Wildlife Refuge during the winter season.",
+    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/Bald_eagle_about_to_fly_in_Alaska_%282016%29.jpg/330px-Bald_eagle_about_to_fly_in_Alaska_%282016%29.jpg", credit: "Wikimedia Commons" },
+  { name: "Black bears in the Apalachicola", species: "Florida black bear", lon: -84.4700, lat: 30.1750,
+    info: "The Apalachicola National Forest is home to one of Florida's largest black bear populations. Store food securely when camping.",
+    photo: "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0f/Vancouver_Island_black_bear_%28Ursus_americanus_vancouveri%29_Tofino_4.jpg/330px-Vancouver_Island_black_bear_%28Ursus_americanus_vancouveri%29_Tofino_4.jpg", credit: "Wikimedia Commons" }
+];
+
+/* Icons exported from your current AGOL scene, so pins match what you already built. */
+const EXISTING_ICONS = {
+  "Beach": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAACXBIWXMAAA7EAAAOxAGVKw4bAAADL0lEQVRYhb2YO2/bMBDHL4C2dC+ksd29yEu7Z7OMdu8sfQzLH6B77Tl7C1Nb9maxlu7JZgvd6734szyBcik+9PABRByI4v10vBcZ0XhJiCglolj9ZjkTUa3GYIkGvgegjIhW6rdLGiISRLQPBQ4FzNXwgdIl1t4F4FYBTwYIoN0AMJNgjYMCXStXGAVYEtGGppeUiE7KmtAxCFAoP5tTNkrHMhTwFnC6NY8myGgquDR9K0eSvKE4vqe6/t0O3yWU3swFWIbA5flCDsD1CSCL4skHdqX0l32AaWhApMpyrjnH4xfa739JUIdslCVrEyBSSZAUSiGs6BK29Hr9g87nP7apgquSDjgkAQdDsjWT5JtPYt9fAw6WIgASQbTbPbi2uwOYTlElisDthk9aAkcyMWAntG8Fuds90HL5aJvSAk6akIviSebD1eqddZ4r+vGdkdbPTSapW3Fnrm2bozngyvKjtB5XEtt2OwBlmonngltr+a4P0mVt3uJZ4QpL4DTNxQk4KxxLH6SrPke3gLNBOkqeBLS23C64PF+07ZVHje1A+rRj0ZhjYdNcfLqTXsiqenXOHQV4dljLJr4fFmnnVmO6ybL3JMSLdZub5mKFda1hkTrS+q/cpBz1Ev6SZd+NK5QqQFBTTf4EuMPhE223z1SWPwcD7k2AWBwBAACA6ApQa/N80dZbIT7Lj9Ah8T4+ELLZfJDPdEvi+b93e63btlt8h9Ipe4BjgQJWYqoAcXwvG1FsNxSajgKwJAcH5uM5Wq4eQMmk58GtOvF3BAp1UFNparQ5+HudjK/XcHU5Gk8nUYtrK2JhbBv7onGV7bO0wulUGJ/D4vBPuIAnmHyN726uK8laXUdIgWJEJ5RwUtalql5bv0SS5i3U4Tid4EPhAvoOwAA9tVhazwR4Vg/l0VNPHVAEa8EKCBD4Ta0FBP6/u/sqHR9zTO08LMm+yb7aAyd8Du7/9YkAhmKbCPFizXmO8lZdXyT1NQtLdVcyaTPrkMp0NrJ1M8sbXiBVfQc3V7uVzXg/yDLqfpDUy0KNyY4H5HkVHAUsloy4o6ZQsFBAFtRsDL6J8IXlUhp8y/8XMoKbMiimbm0AAAAASUVORK5CYII=",
+  "Park": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACoAAAAqCAYAAADFw8lbAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAE2UlEQVRYhcWZv3IaVxTGvytWUZtNB2nC5gmSxU+A6HAaYWTkMhY8gTVxGokmzsh9JuC0CtIaNZGqSHqCaPUGRlVQZygdEe/NfBctWpZ/967R5JthBGhhf3PuPfec82FhCfr9qP2Yf1eESEsZZPhciJVuIOWNFEH3Wbnsf+o9rCQfOvA8N4WUC4mqhHR7vR6uO+/U//icsm0btv2Fet46agNSngKiCzmoVyqV7oOCEnAlWKkS8Pz8T/T7Pfj+Ja47nbmfs20b37q5Yj5fQNZxqq3DdtMUWAu01WplIKxG732/eOVf4uLibCFcVIzyxfmZemQdB66bq26Uygq48rRUwzJAGUUhUw3f/8tttz0jwGni5/lov/XwYueHKve3CAa5RdGdC9o6ervXe9/fPW57KhrL1uv9n5FfL6Sfb9f+PvSOa0/LG01jUEJed653GUUu90Pp4vwMnc47/PRqv3HoHWMWrLVsyNRjQKSBf2fGZlLcCj++3JkLa03bk1zuJJCre4C1e/86KeyB5/nxs9eKZzcT53gJkKsNQLjAoGYG+9ubBr7frp0AyMwE5RHE7DZNnM9OgFRx8n2rCogMcKvqlp5473y+kG4dthvRo8uKLXmRS66rFRew9qZDhuL/1i6Bf3LQ1uv9V/jl1zfVA89rhltgBMqKw+XWPSd1IKPXEvb2O0B29QtEPl+oAqiNQBlNlkVWHF2l+BUAPp7ew4j0+DWBD8ib+9fcw7p7lnmSXy+MoqpA2WCwdptUnegNCcl9Ghff//ClXhSnRZUr7OYeuQCGoIwmG4wkYrJwC8SjGYpL/mEsf/V1deXDdR9x7ZoKlK0au6Ak4jE0b5+K9DDaJpkfihWLbHxusSkY9pPmzcaqZjKlisNrB3tm308msjGHVETDpte0VEYP+EWydoGPJ8MEMxHZvrFzGYvjgykkk4RLbqq1y2TJRUaLM044PiwjeRbJNLnIRkbjmUmVxfT4EjLC8xTElttkv4ankcVpkTONrtQNIjfhFtABHRg0J1Fls46aaC2OtOG0mCS6fOhcJ32zti8U2choce5OAmmaUKuNYWRNs54io8U6yrmby6+bVLNK5iLxM+yidLOeE+tXjnOzVS6FJVSecu7W7UOTZr1glfpDv+VznK8hpIy2eaJLc0AHdFHJ1N0yOslFJghEQOWgTgeDoZ5XSnWTZxnJRRY+AhGcjEA5/NO1oIMxCzQ86KP95dTr0sO/i67jd81LLtflZkbz2Wasw2dUabPQwZgmJoBORVm7a8JMRo+4GMmNUpnRHMV8BBpGlTYLHYz/U6VSeSya1FgJ5dTHto82y0NYODrKrxfYLPsyuK1H35+o9TSs6AWxaf1UQyzJkj/friGArG/FTLMJUG4BGlZ0LOhcmMIGfnLIFzsvmQ31rc0nE+VkavdE74ceUBLYQS05pG1/Xq9sPpnaV81s86KwtFkeas/m1wtquRnJWZBzQUNYGlb0gmiz0MEwabIXRZHZzcQJZix3VAsb5ztLJUMviDYLI0tzIClwdmiNq3OSRxCzO544iUCjRxddC9osdDBoDnDu1jkdso6jGoy7HxsUIA/z6Dm5NNBIdBUwHQyaA9N+vun3e6ozDxtytmqqCxLwWbtNABOBxoD5UCWOczdH2lk/iLGfTHKfqP4DQenHJWKPty0AAAAASUVORK5CYII=",
+  "Boat Ramp": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACoAAAAqCAYAAADFw8lbAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAFcElEQVRYhbWZvU8jZxCHZ2H/gDgVdhUcKXXI+to0hiISXHM+83EVymF3l+pQSANuQsRVNFHsi0QaYtgzTUC6KECTNix3daQz1RmqM3WQvNGz69esF3+8u2d+0orFu/Y+nndm3pmxKSPQ7/u1Of6OGUbSdVspzg1jrNFy3UvXaDWe5PPOxz7DjPOmXdu2xmXcElcKrrhWs9mUi/o77xrnKJFISCLxqXde3a+JuO6RiNEQ96a0uLjYuFdQAMdaYwUAT07+kuvrpjjOmVzU6wPfl0gk5CsrM5vNzshkOl2o7tUqUYG1QKvVakoMs9z8cD177pzJ6enxULigsPLpybF3TKbTYlmZwqNc3gNeXMgVZRSgWNFwx8uO849Vq9mRAHuJ93PUXtnyfPX7Av5ttG4yw6w7ELS6/2qj+eF6/aBme9YYtV5s/STZ6Znk05Xi+z37oLiQf1SJDArkRf1iHSuy3Pel05NjqdffyY+bW+U9+0D6wZojhzzcF2lciRS/034LrvDD2upAWLOXT7LckSFTEyJJjqR/WF+KXF750BFhd23bCedeMxzdBM5BHEv+YftwSmd/izhvRTJfa38EsL++LMu3K8VDvnpfUFIQ0R05cLCmsmBlx39tfa0bXFM8O5udSVb3auVg6jJDSz7LkkeWNeX/PXwtsrHpn+MGhWUfFstG0IutTfn5l5eFXduuKBfogLLjsNyR8yTBo0DnvvGPruu2iPNGZG4+8gaRzc4URKTYAcWabIvsOJHlBc9E+3zCX371v3ptNgSvIeIkOz3TsaoHSoHB3h3ZmlhP+SHLe/Ta91EinWXfWLuFjugCWJUVtjIPLD7dX3pXChQYkcXDPbjffP8MCmAOvowXWFORffX83BHLesDyVzxQSjWqoMhS1gtG/2zbyqVN/xpfgINrEcWOBRvnJkWBX0/GKDYUJGAsdWH59hrnyqpYUjPxBwUTbMSQZ1FV9EaWguuXLwvt64AWn0VeesU2lcikTNqHSO8ECn8bBBgW97FTkRFwA+UWmoLRpMdR7cNA4WPl7VippiO1CSi30ChcYINRvxXBAuTMUclqbxJDpLKRSbdIT6Olh3mR9//KSFR8pnXb5GTa62hNWlrVLWpZlSULRnccVdqZQEOwwWjSd0d+yChAIwhGk32Uvpvl1woqLBHez6PIeattTTrWz9Lpy6V8Tm2h7hF9t3YdSoqJa1Xnjfat6fTnYrhusMwzGgwHtEGP/owPeqmfP2ESQwKg7k2JCQam1tpKG5f+A5V1VI/US+o+ldrCxUsfwcLRMlqHHVCaf6YWTDC0QPGx1Bfdr6mCpLx9W/IBFWPbRJaVoVqqPJkPVfhYlTELE4xYUqmrsuNDxyhClLDko1wea3ba5g6osipjFiYYw5u5qdvIZ2mDlmtc6d3XR7lcvsuaXaAe7EKuSNnHmKVnYOGHVO0ssQoKoKxt/7yy4xccgKmCGan+Xt2HW7DP97B6dnqGYtlxW/+Vgq/f2esZWDELomi946+edZIiD+fvBoVqPQrLt2DAhK2oihK+bCjxs+RPV4rSEre0FBqa3QHFBRhYMbFgctEFq3ywl9S1cttq/Uq5Pp8B5PNVVsAtLc0/9iJ9IChi9sMMqCfsMBX1Z05hyETik9Li/OONXvf0LfOCsIxZ7mPsqHyS5caS/SDRwHoUWAZWzIIYszDB0KoHNK1IdBM4rT7LHdTQwrk9UkkxC2LMgmUZDsQFnvRH416eJAUR3eHAiQUaTF1MLRizMMFgOEDf3TM79ICjwGj/2OABksyDeXKkv4q0resBM8FgONDr55vr66ZXmauCnFLNq4IMcdi7owDGAg0Bc3hbHH03LW2/H8SoJ+M8J6j/AY4IMbrv2SX5AAAAAElFTkSuQmCC",
+  "Golf Course": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAACXBIWXMAAA7EAAAOxAGVKw4bAAADIklEQVRYhc2Yr2/bQBTHHzDraFQlcGUBIw5pQEs2lkSaNjJpOEnJ/oMqjvofjKw1njSSadMc1pEMbKQmAS5qWRNFHVz59D29s5zr+cf5rlK+0smxHJ8/Pt/73rvnkb1aROQTUZN/S62IKOZWW17N+wDUJ6Ie/y7TmogiIgpNgU0Bh9yqQGXVzNwLwCkDOwME0EUNMJ3Qxw8GHfBUsAIMiGhC7uUT0R2PJp5RCzDieVao04tX4vg1XFISb0xBJ/yMjilgJTipt8MXokGARDMAxmhe6SA9F3Cq2v6+aAC+Xz8I0E/Bb6oAGbE7FAIGNnCqMIKL6IYqqsfPD/IAfVcBkcQbOp/+MYGTmvBIxjpAWIm1ZuFSwN2v/tXtIpKrUhawjgG7GrU8Yw9VQCt9GHy3GTVVW4C+o1XCpQSTBNwK7R2SLwGd2YpjDb1MPrezI+jTDsvjkN5ZeUqaXqpG65lYZxvNPXEOU1avf7l6LzwRlvN3/SB8sUaWkwJWgjnqH4gjzqVmClx6X3OPjnvP0/Px5FAckThI8GvOeMrAcwGP+wei4yyQrRoKOATAIoP3dCn3SdBN3/qp1fb36efdSCyRupTM0+2yjpS3dKGEP2XeF8GAVAbEXHGpWbiks9Fluj2Qmbf6n6I5uM7aDTJgda7Y6DoTCL/mt48AZRakUexl8q80m5G2UBYgbb6OzvFSmOi6e8ZBN/3EbzSjV5A7poChmm4hsuBn0u/yAE+Crvg8mBY4B4wq9IG+dCrJH9N0S9ZQ0mUPb/SydV4a0ePJYe2IX8xvizZTginrg1Pe8W8JHeANMTIu52USb9LAydFUNWq5UXmUPAgz7X8TnxBRaGves0xU5yiWtRt1JRlwOUIrgL7rfBaAH6PXhfMzT3mGrBs9HeCKLxZuPQGK+Xma42mWG6qtylfRxr00TzwbXQpfK1uzEQywoQpwc7WQlJcsdLhWUgq5iG5Ey1oMPj1sBwZtkGrNdXujonSrY1KjSTiQakoLVwZIfNNT1QelrOqDxDdH3FxuD+IqpWDPoLOWRY2aTMFMAaWwZqPJSkRVWLmUGlf5/wOUxmAKwqVBUwAAAABJRU5ErkJggg==",
+  "Spring": "data:image/png;base64,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",
+  "Welcome Center": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAACXBIWXMAAA7EAAAOxAGVKw4bAAACcklEQVRYhdWY/ZGjMAzF3x80EdowZcCWQcoAyghlhJQRyrhcGzuPlTIOaxubj1zuzXgCDuAfwpZkZdiuHIABcJJj1QPAKG21spX3EagCUMrxkv4CGAD0qcCpgLW0GChbJ+teAnYCvBsggS4rwFziM64C+iVTYRNgC6DB/jIA/og1OcYqwEHm2ZFqZIwiFfAdcLY17y7I7APgbMhBvEMQsP0HcKpSxm99gGbtgjDGoK7pRYCu6/B4BBdnSI1YcnQB0pUkKc9zlGWJtm1xOtHdYQLt+x7n83kt5KBRyQZMdsB1XU+N1vP9R2sSfqVj7+eAm8HmappmsjBBhyEqeKheADmS2RPMFq+/Xq8Yx3H67PyN0MSkgFXwSmOmz0RLbJExBvf7PQX0CVj6FgAtpmCRbx6ly+XyBA2ozqx87pfoKmi5FZN8L00W9E6oqqqS51uquHBCX4aAP87LIcJxFR6tcQHQTtNfxE/LN2RTJ6zuwtVny15UOtdcfUtazAf5IM5FhQn12eK5vep57uo7ak/yNmVLKfcnAI74YGX/A6DuW73uJlZGfOaOEWdUwCElmwmFL6oonPufTYC9D3AeSVwJQ2n1MX7T39n3+foi9Ey3tIZiXFmM/WAez6HNrG8efegvXX3MbALWnphsP9jJjv8lFm9NsWL2MdweONTNHbVuVJ6mYLTYM8VKEAcdXJHkS8oRk/hmnrc7Wp0ezAEf8ufxKYxfL5Wv0Mb92ETQrdu8kORLFgqplZg3w1Up2UzxxhrNzbdxW0q3qgPrg6pN9UHIzYO0zfHaUlQpOEt4WL6hRo1UsFRAFZ0im1YiYmE1lCZX+b8Bkkv7aHjaVywAAAAASUVORK5CYII=",
+  "Lighthouse": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACXBIWXMAAA7EAAAOxAGVKw4bAAADj0lEQVR4nOWaS2gTQRjHf61ftWir9RFLFayPS31QxURUECxKRbFVQenFi3hIqygFL156SL15Erxog9BLEUQPanpS8aBSfKUIHnxVFEWLL9BDQbGKDDuhaZLd7NZNN+n8YGF2d2a+/f7zzczO7AqGIxiOYDiC4QiGIxiOYDiC4QiGIxiOYDiC4QiGIxiOYDiC4cgk2wsDrUBL2nmKYSAJfATiOj0lBFikHY5mOJxJXZowUS1APxArZQGiLhy3I6wPVb4dSJSaAIm0Fs3Jvg2wfxN0xGHkl2NkXNfRoLpP0QsQ1mFr63xZGXTth1Nt1nnjEmg7Ay9U77dH1fcYiBS7ADEn5xfOgYudsH3N2LXGehg8DQfPwtVHecX1VQShgGG/bilsaYAnb+H+Kxj9A22bYUUtdF8eX3BpCI7vgsE38O4r1MyyylZWwJX7WSL06HGhqASIZra8clwdkRXQ0Wyl+wfhwCaIZQjQtBqaVkF5GRzbCd9H4N5zePvF1la/HwOj4N9Upx7KFtX6o3/zV6RaXuX9+VsNFo5Ze4pJgJZcU12qC6jwv3AbVi6GAxuhtgYONY3P27AYGhbB0Cc4f9MSIrLcmimuPswZCXVadPXSFLgA0VwXU10gxdp6aAnDgiroPZqd//FrOLQV+u5YXeDWU+vIM+AGLkDY7YtO313ruNEFzY3Z9zt7YeClJ9t12nYySAFavRYIzc59fXrFhOwHLkCL1wILbASomDYh+/81DgiTTJlDBNgJU0jEhzo8LXSqZ8IMG6uh6sLbDzwCQg5O2kVGIZHJNujkZKkKMKynI1c4OTnBMUDZD1SApJeZYG6V7xGQDFqAj14yq8XOVBMgnm8hlE5Vpe8CJIqhCyTdTkdO/XxeFUwrhz9/PdsOfBbodyuAUyur7jG/Gj7/8GSXYhAgprtB3tkgX5ir+y4FSPqxZS74R7vevc3iyA6onWOl1y9zruTEbnj/zUpfGoBnH2yzduMDgn8kdEhmTYkn90J9yF0lh7eNpdUmiI0Acb++Ewj+0qp3bceNB6evjUWAFx4M2Ya+LxuihXoVjmSKcO6Gb3Ur5/eUwlogojctXb8fuCDuZ8tPxmKoXY8JPV7WCjat3l2K3wbRD53QkRDzKMSU+DqcHr7xjC++dv8HJLVoU+b/gHRSDv7XVrafCIYjGI5gOILhCIYjGI5gOILhCIYjGI5gOILhCIYjQT9A0PwDTXW80pYLSuQAAAAASUVORK5CYII="
+};
+
+
+/* ============================================================
+   APP - no edits needed below this line
+   ============================================================ */
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const $ = (id) => document.getElementById(id);
+const items = [];
+const markers = new Map();
+const hiddenCats = new Set();
+let activeId = null;
+let tourToken = 0;
+
+$("title").textContent = CONFIG.title;
+$("subtitle").textContent = CONFIG.subtitle;
+
+function iconFor(cat) {
+  const c = CONFIG.categories[cat];
+  if (!c || !c.icon) return null;
+  if (c.icon.startsWith("EXISTING:")) return EXISTING_ICONS[c.icon.slice(9)] || null;
+  return c.icon;
+}
+function colorFor(cat) { return (CONFIG.categories[cat] || {}).color || "#5B6B60"; }
+function labelFor(cat) { return (CONFIG.categories[cat] || {}).label || cat; }
+
+// Case-insensitive field lookup that skips blanks
+function pick(props, names) {
+  if (!names) return "";
+  const keys = Object.keys(props || {});
+  for (const n of names) {
+    const k = keys.find((key) => key.toLowerCase() === n.toLowerCase());
+    if (k && props[k] != null && String(props[k]).trim() !== "") return String(props[k]).trim();
+  }
+  return "";
+}
+
+async function queryLayer(url) {
+  const q = url.replace(/\/+$/, "") + "/query?where=1%3D1&outFields=*&outSR=4326&f=geojson";
+  const res = await fetch(q);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || "ArcGIS error");
+  return data;
+}
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: CONFIG.basemapStyle,
+  center: CONFIG.startView.center,
+  zoom: CONFIG.startView.zoom - (window.innerWidth <= 720 ? 1.1 : 0),
+  pitch: CONFIG.startView.pitch,
+  bearing: CONFIG.startView.bearing,
+  maxPitch: 72,
+  attributionControl: { compact: true }
+});
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+map.addControl(new maplibregl.GeolocateControl({ trackUserLocation: false }), "top-right");
+
+map.on("load", async () => {
+  softenBasemap();
+  if (CONFIG.terrain.enabled) addTerrain();
+  loadOutline();
+  await loadLayers();
+  updatePinScale();
+});
+
+function softenBasemap() {
+  for (const layer of map.getStyle().layers) {
+    try {
+      if (layer.type === "background") map.setPaintProperty(layer.id, "background-color", "#EEF2EA");
+      if (layer.type === "fill" && /water/.test(layer.id)) map.setPaintProperty(layer.id, "fill-color", "#9FD3D6");
+    } catch (e) { /* some style layers use expressions; skip them */ }
+  }
+}
+
+function firstSymbolLayerId() {
+  const l = map.getStyle().layers.find((x) => x.type === "symbol");
+  return l ? l.id : undefined;
+}
+
+function addTerrain() {
+  const tiles = ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"];
+  const src = { type: "raster-dem", tiles, encoding: "terrarium", tileSize: 256, maxzoom: 14,
+    attribution: '<a href="https://registry.opendata.aws/terrain-tiles/">Terrain Tiles</a>' };
+  map.addSource("dem", src);
+  map.addSource("dem-shade", { ...src });
+  map.setTerrain({ source: "dem", exaggeration: CONFIG.terrain.exaggeration });
+  map.addLayer({ id: "hillshade", type: "hillshade", source: "dem-shade",
+    paint: { "hillshade-shadow-color": "#193F23", "hillshade-highlight-color": "#FFFFFF", "hillshade-exaggeration": 0.35 } },
+    firstSymbolLayerId());
+}
+
+async function loadOutline() {
+  if (!CONFIG.countyOutlineUrl) return;
+  try {
+    const data = await queryLayer(CONFIG.countyOutlineUrl);
+    map.addSource("county", { type: "geojson", data });
+    map.addLayer({ id: "county-glow", type: "line", source: "county",
+      paint: { "line-color": "#1A9DAA", "line-width": 10, "line-opacity": 0.18, "line-blur": 4 } });
+    map.addLayer({ id: "county-line", type: "line", source: "county",
+      paint: { "line-color": "#193F23", "line-width": 2, "line-dasharray": [3, 2] } });
+  } catch (e) { console.warn("County outline did not load:", e); }
+}
+
+async function loadLayers() {
+  const problems = [];
+  for (const layer of CONFIG.layers) {
+    let features = [];
+    try {
+      if (layer.url) {
+        const data = await queryLayer(layer.url);
+        features = data.features.map((f) => ({ props: f.properties, coords: f.geometry && f.geometry.coordinates }));
+      } else if (layer.demoData === "DEMO_WILDLIFE") {
+        features = DEMO_WILDLIFE.map((d) => ({
+          props: { Name: d.name, Species: d.species, Info: d.info, PhotoURL: d.photo, PhotoCredit: d.credit },
+          coords: [d.lon, d.lat] }));
+      }
+    } catch (e) {
+      problems.push(layer.kind);
+      console.warn(layer.kind + " layer did not load:", e);
+      continue;
+    }
+    features.forEach((f, i) => {
+      if (!f.coords) return;
+      const p = f.props, F = layer.fields;
+      const item = {
+        id: layer.kind + "-" + i,
+        kind: layer.kind,
+        name: pick(p, F.name) || "Unnamed place",
+        category: layer.kind === "wildlife" ? "Wildlife" : (pick(p, F.category) || "Other"),
+        species: pick(p, F.species),
+        info: pick(p, F.info),
+        address: pick(p, F.address),
+        photo: pick(p, F.photo),
+        credit: pick(p, F.credit),
+        lngLat: [f.coords[0], f.coords[1]]
+      };
+      items.push(item);
+      addPin(item);
+    });
+  }
+  renderChips();
+  renderList();
+  const status = $("status");
+  if (problems.length) {
+    status.className = "status error";
+    status.textContent = "Some points didn't load (" + problems.join(", ") +
+      "). Check that the layer is shared publicly in ArcGIS Online and that its URL in CONFIG ends in /FeatureServer/0.";
+  } else {
+    status.remove();
+  }
+}
+
+function addPin(item) {
+  const el = document.createElement("button");
+  el.className = "pin" + (item.kind === "wildlife" ? " wild" : "");
+  el.style.setProperty("--c", colorFor(item.category));
+  el.setAttribute("aria-label", item.name);
+  const head = document.createElement("span");
+  head.className = "pin-head";
+  const img = item.photo || iconFor(item.category);
+  if (img) head.style.backgroundImage = "url('" + img.replace(/'/g, "%27") + "')";
+  if (item.photo) head.style.backgroundSize = "cover";
+  const label = document.createElement("span");
+  label.className = "pin-label";
+  label.textContent = item.kind === "wildlife" && item.species ? item.species : item.name;
+  el.append(label, head, Object.assign(document.createElement("span"), { className: "pin-stem" }),
+    Object.assign(document.createElement("span"), { className: "pin-foot" }));
+  el.addEventListener("click", (e) => { e.stopPropagation(); select(item.id); });
+  const marker = new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat(item.lngLat).addTo(map);
+  markers.set(item.id, marker);
+}
+
+function renderChips() {
+  const present = [...new Set(items.map((i) => i.category))];
+  const order = Object.keys(CONFIG.categories);
+  present.sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+  const wrap = $("chips");
+  wrap.innerHTML = "";
+  present.forEach((cat) => {
+    const b = document.createElement("button");
+    b.className = "chip";
+    b.style.setProperty("--c", colorFor(cat));
+    b.setAttribute("aria-pressed", String(!hiddenCats.has(cat)));
+    b.innerHTML = "<i></i>";
+    b.append(document.createTextNode(labelFor(cat)));
+    b.addEventListener("click", () => {
+      hiddenCats.has(cat) ? hiddenCats.delete(cat) : hiddenCats.add(cat);
+      b.setAttribute("aria-pressed", String(!hiddenCats.has(cat)));
+      applyFilter();
+    });
+    wrap.append(b);
+  });
+}
+
+function renderList() {
+  const order = Object.keys(CONFIG.categories);
+  const sorted = [...items].sort((a, b) =>
+    ((order.indexOf(a.category) + 1 || 99) - (order.indexOf(b.category) + 1 || 99)) || a.name.localeCompare(b.name));
+  const list = $("list");
+  list.innerHTML = "";
+  sorted.forEach((item) => {
+    const li = document.createElement("li");
+    li.dataset.cat = item.category;
+    const b = document.createElement("button");
+    b.className = "row";
+    const t = document.createElement("span");
+    t.className = "thumb" + (item.photo ? " photo" : "");
+    t.style.setProperty("--c", colorFor(item.category));
+    const img = item.photo || iconFor(item.category);
+    if (img) t.style.backgroundImage = "url('" + img.replace(/'/g, "%27") + "')";
+    const txt = document.createElement("span");
+    const name = document.createElement("b"); name.textContent = item.name;
+    const sub = document.createElement("small");
+    sub.textContent = item.kind === "wildlife" && item.species ? item.species : labelFor(item.category);
+    txt.append(name, sub);
+    b.append(t, txt);
+    b.addEventListener("click", () => select(item.id));
+    li.append(b);
+    list.append(li);
+  });
+  applyFilter();
+}
+
+function applyFilter() {
+  items.forEach((i) => { markers.get(i.id).getElement().hidden = hiddenCats.has(i.category); });
+  document.querySelectorAll("#list li").forEach((li) => { li.hidden = hiddenCats.has(li.dataset.cat); });
+}
+
+// Keep the map's visual center clear of the panel
+function framePadding() {
+  return window.innerWidth > 720
+    ? { left: 392, top: 0, right: 0, bottom: 0 }
+    : { left: 0, top: 0, right: 0, bottom: Math.round(window.innerHeight * 0.46) };
+}
+function cameraOffset() { return [0, 0]; }
+map.setPadding(framePadding());
+window.addEventListener("resize", () => map.setPadding(framePadding()));
+
+function select(id) {
+  const item = items.find((i) => i.id === id);
+  if (!item) return;
+  stopTour();
+  if (activeId) markers.get(activeId).getElement().classList.remove("active");
+  activeId = id;
+  markers.get(id).getElement().classList.add("active");
+  const cam = { center: item.lngLat, zoom: Math.max(map.getZoom(), 13.5), pitch: 62, bearing: map.getBearing(), offset: cameraOffset() };
+  reduceMotion ? map.jumpTo(cam) : map.flyTo({ ...cam, speed: 0.9, curve: 1.4, essential: true });
+  showDetail(item);
+}
+
+function showDetail(item) {
+  const d = $("detail");
+  d.innerHTML = "";
+  const back = Object.assign(document.createElement("button"), { className: "back", textContent: "‹ All places" });
+  back.addEventListener("click", closeDetail);
+  const hero = document.createElement("div");
+  const img = item.photo || iconFor(item.category);
+  hero.className = "detail-hero" + (item.photo ? "" : " icon");
+  if (img) hero.style.backgroundImage = "url('" + img.replace(/'/g, "%27") + "')";
+  const body = document.createElement("div");
+  body.className = "detail-body";
+  const cat = document.createElement("span");
+  cat.className = "cat"; cat.style.setProperty("--c", colorFor(item.category));
+  cat.innerHTML = "<i></i>";
+  cat.append(document.createTextNode(item.kind === "wildlife" && item.species ? item.species : labelFor(item.category)));
+  const h = document.createElement("h3"); h.textContent = item.name;
+  body.append(cat, h);
+  if (item.info) { const p = document.createElement("p"); p.textContent = item.info; body.append(p); }
+  if (item.address) { const a = document.createElement("p"); a.className = "addr"; a.textContent = item.address; body.append(a); }
+  const dir = document.createElement("a");
+  dir.className = "directions"; dir.target = "_blank"; dir.rel = "noopener";
+  dir.href = "https://www.google.com/maps/dir/?api=1&destination=" + item.lngLat[1] + "," + item.lngLat[0];
+  dir.textContent = "Get directions";
+  body.append(dir);
+  if (item.photo && item.credit) { const c = document.createElement("p"); c.className = "credit"; c.textContent = "Photo: " + item.credit; c.style.marginTop = "14px"; body.append(c); }
+  d.append(back, hero, body);
+  $("panel").classList.add("showing-detail");
+  d.scrollTop = 0;
+  back.focus({ preventScroll: true });
+}
+
+function closeDetail() {
+  $("panel").classList.remove("showing-detail");
+  if (activeId) markers.get(activeId).getElement().classList.remove("active");
+  activeId = null;
+}
+
+// Tours
+function renderTours() {
+  const wrap = $("tours");
+  CONFIG.tours.forEach((tour) => {
+    const b = document.createElement("button");
+    b.className = "tour";
+    b.textContent = tour.name;
+    if (tour.note) { const s = document.createElement("span"); s.textContent = tour.note; b.append(s); }
+    b.addEventListener("click", () => playTour(tour));
+    wrap.append(b);
+  });
+}
+function stopTour() { tourToken++; }
+async function playTour(tour) {
+  closeDetail();
+  const token = ++tourToken;
+  for (const stop of tour.stops) {
+    if (token !== tourToken) return;
+    const cam = { ...stop, offset: cameraOffset() };
+    if (reduceMotion) { map.jumpTo(cam); }
+    else {
+      map.flyTo({ ...cam, duration: 5500, curve: 1.3, essential: true });
+      await new Promise((r) => map.once("moveend", r));
+    }
+    await new Promise((r) => setTimeout(r, reduceMotion ? 2500 : 1200));
+  }
+}
+["mousedown", "touchstart", "wheel"].forEach((ev) => map.getCanvas().addEventListener(ev, stopTour, { passive: true }));
+renderTours();
+
+// Keep billboards readable: stems grow with tilt, pins shrink when zoomed out
+function updatePinScale() {
+  const z = map.getZoom(), p = map.getPitch();
+  const scale = Math.min(1.1, Math.max(0.62, 0.62 + (z - 9) * 0.12));
+  const stem = Math.round((8 + p * 0.75) * scale);
+  const root = document.documentElement.style;
+  root.setProperty("--pin", scale.toFixed(2));
+  root.setProperty("--stem", stem + "px");
+  map.getContainer().classList.toggle("show-labels", z >= 12.5);
+}
+map.on("zoom", updatePinScale);
+map.on("pitch", updatePinScale);
+</script>
+</body>
+</html>
