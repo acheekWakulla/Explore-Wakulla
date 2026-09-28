@@ -171,6 +171,40 @@
     .tours { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   }
   @media (prefers-reduced-motion: reduce) { .pin-head { transition: none; } }
+    .help-btn {
+    margin-top: 12px; background: none; border: 1px solid var(--cypress); color: var(--cypress);
+    border-radius: 999px; padding: 7px 14px; font: 600 14px var(--sans); cursor: pointer;
+  }
+  .help-btn:hover { background: #E8EDE5; }
+  .help {
+    width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 48px); border: 0; padding: 0;
+    border-radius: 20px; background: var(--shell); color: var(--ink);
+    box-shadow: 0 20px 60px rgba(25, 63, 35, .35);
+  }
+  .help::backdrop { background: rgba(23, 35, 27, .45); }
+  .help-inner { padding: 24px 24px 20px; overflow-y: auto; max-height: calc(100vh - 48px); }
+  .help h2 { font-family: var(--serif); font-weight: 400; color: var(--cypress); font-size: 26px; margin: 0 0 4px; }
+  .help h3 { font: 600 15px var(--sans); margin: 18px 0 8px; }
+  .help p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; }
+  .help dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; margin: 0; font-size: 15px; }
+  .help dt { font-weight: 600; }
+  .help dd { margin: 0; color: var(--muted); }
+  .device-toggle { display: flex; gap: 6px; margin-top: 14px; }
+  .device-toggle button {
+    border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 6px 12px;
+    font: 500 14px var(--sans); cursor: pointer;
+  }
+  .device-toggle button[aria-pressed="true"] { background: var(--cypress); color: #fff; border-color: var(--cypress); }
+  .legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .legend li { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+  .legend span {
+    width: 30px; height: 30px; border-radius: 50%; flex: none; background: #fff center/70% no-repeat;
+    box-shadow: 0 0 0 2px var(--c);
+  }
+  .help-close {
+    margin-top: 20px; width: 100%; border: 0; border-radius: 12px; background: var(--cypress); color: #fff;
+    padding: 12px; font: 600 15px var(--sans); cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -181,6 +215,7 @@
     <header class="panel-head">
       <h1 id="title">Explore Wakulla</h1>
       <p id="subtitle"></p>
+            <button class="help-btn" id="helpBtn" type="button">How to use the map</button>
       <div class="chips" id="chips" aria-label="Show or hide categories"></div>
     </header>
     <div class="scroll">
@@ -195,6 +230,46 @@
   </div>
   <div class="detail scroll" id="detail" aria-live="polite"></div>
 </aside>
+<dialog class="help" id="help" aria-labelledby="helpTitle">
+  <div class="help-inner">
+    <h2 id="helpTitle">Getting around the map</h2>
+    <p>The map is 3D, so you can tilt and turn it to see the county from different angles.</p>
+    <div class="device-toggle" role="group" aria-label="Show controls for">
+      <button type="button" data-device="computer">Computer</button>
+      <button type="button" data-device="phone">Phone or tablet</button>
+    </div>
+
+    <div data-controls="computer">
+      <h3>With a mouse</h3>
+      <dl>
+        <dt>Move around</dt><dd>Click and drag</dd>
+        <dt>Zoom</dt><dd>Scroll wheel, or double-click to zoom in</dd>
+        <dt>Tilt and turn</dt><dd>Right-click and drag, or hold Ctrl and drag</dd>
+        <dt>Reset north</dt><dd>Click the compass button in the top right</dd>
+      </dl>
+    </div>
+
+    <div data-controls="phone">
+      <h3>With your fingers</h3>
+      <dl>
+        <dt>Move around</dt><dd>Drag with one finger</dd>
+        <dt>Zoom</dt><dd>Pinch, or double-tap to zoom in</dd>
+        <dt>Turn</dt><dd>Twist with two fingers</dd>
+        <dt>Tilt</dt><dd>Drag two fingers up or down</dd>
+        <dt>Reset north</dt><dd>Tap the compass button in the top right</dd>
+      </dl>
+    </div>
+
+    <h3>What the pins mean</h3>
+    <p style="margin-bottom:10px">Tap any pin for details and directions. The dot at the bottom of each pin marks the exact spot.</p>
+    <ul class="legend" id="legend"></ul>
+
+    <h3>Not sure where to start?</h3>
+    <p>Try a fly-over in the sidebar. The map will take you on a short tour.</p>
+
+    <button class="help-close" type="button" id="helpClose">Start exploring</button>
+  </div>
+</dialog>  
 
 <script>
 /* ============================================================
@@ -625,6 +700,43 @@ function updatePinScale() {
 }
 map.on("zoom", updatePinScale);
 map.on("pitch", updatePinScale);
+// ---------- Help / legend popup ----------
+(function () {
+  const dlg = $("help");
+  const isTouch = window.matchMedia("(pointer: coarse)").matches;
+
+  function showDevice(device) {
+    document.querySelectorAll("[data-controls]").forEach((el) => { el.hidden = el.dataset.controls !== device; });
+    document.querySelectorAll(".device-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.device === device)));
+  }
+  document.querySelectorAll(".device-toggle button").forEach((b) => b.addEventListener("click", () => showDevice(b.dataset.device)));
+  showDevice(isTouch ? "phone" : "computer");
+
+  // Legend built from CONFIG.categories, so it stays in sync when you add categories
+  const legend = $("legend");
+  Object.entries(CONFIG.categories).forEach(([key, cat]) => {
+    const li = document.createElement("li");
+    const sw = document.createElement("span");
+    sw.style.setProperty("--c", cat.color);
+    const img = iconFor(key);
+    if (img) sw.style.backgroundImage = "url('" + img.replace(/'/g, "%27") + "')";
+    else { sw.style.background = cat.color; }
+    li.append(sw, document.createTextNode(key === "Wildlife" ? cat.label + " (photo pins)" : cat.label));
+    legend.append(li);
+  });
+
+  $("helpBtn").addEventListener("click", () => dlg.showModal());
+  $("helpClose").addEventListener("click", () => dlg.close());
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); }); // click outside to close
+
+  // Open automatically on a visitor's first visit only
+  try {
+    if (!localStorage.getItem("wakullaHelpSeen")) {
+      dlg.showModal();
+      localStorage.setItem("wakullaHelpSeen", "1");
+    }
+  } catch (e) { /* storage blocked; skip the auto-open */ }
+})();
 </script>
 </body>
 </html>
