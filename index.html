@@ -279,7 +279,7 @@ const CONFIG = {
   title: "Explore Wakulla",
 
   // Where the map opens
-  startView: { center: [-84.32, 30.08], zoom: 10.3, pitch: 58, bearing: 0 },
+  startView: { center: [-84.32, 30.08], zoom: 10.3, pitch: 50, bearing: 0 },
 
   // Free basemap, no API key (OpenFreeMap). Swap for another MapLibre style URL any time.
   basemapStyle: "https://tiles.openfreemap.org/styles/liberty",
@@ -429,7 +429,9 @@ const map = new maplibregl.Map({
   zoom: CONFIG.startView.zoom - (window.innerWidth <= 720 ? 1.1 : 0),
   pitch: CONFIG.startView.pitch,
   bearing: CONFIG.startView.bearing,
-  maxPitch: 72,
+  maxPitch: 60,
+  minZoom: 9,
+  pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
   attributionControl: { compact: true }
 });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
@@ -446,6 +448,10 @@ map.on("load", async () => {
 
 function softenBasemap() {
   for (const layer of map.getStyle().layers) {
+        if (layer.type === "fill-extrusion") {
+      map.setLayoutProperty(layer.id, "visibility", "none");
+      continue;
+    }
     try {
       if (layer.type === "background") map.setPaintProperty(layer.id, "background-color", "#EEF2EA");
       if (layer.type === "fill" && /water/.test(layer.id)) map.setPaintProperty(layer.id, "fill-color", "#9FD3D6");
@@ -463,11 +469,7 @@ function addTerrain() {
   const src = { type: "raster-dem", tiles, encoding: "terrarium", tileSize: 256, maxzoom: 14,
     attribution: '<a href="https://registry.opendata.aws/terrain-tiles/">Terrain Tiles</a>' };
   map.addSource("dem", src);
-  map.addSource("dem-shade", { ...src });
   map.setTerrain({ source: "dem", exaggeration: CONFIG.terrain.exaggeration });
-  map.addLayer({ id: "hillshade", type: "hillshade", source: "dem-shade",
-    paint: { "hillshade-shadow-color": "#193F23", "hillshade-highlight-color": "#FFFFFF", "hillshade-exaggeration": 0.35 } },
-    firstSymbolLayerId());
 }
 
 // Mask everything outside the county: a world-sized polygon with the county cut out as a hole
